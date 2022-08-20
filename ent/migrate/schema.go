@@ -14,12 +14,21 @@ var (
 		{Name: "id", Type: field.TypeInt, Increment: true},
 		{Name: "duration", Type: field.TypeInt},
 		{Name: "block_count", Type: field.TypeInt},
+		{Name: "user_calls", Type: field.TypeInt},
 	}
 	// CallsTable holds the schema information for the "calls" table.
 	CallsTable = &schema.Table{
 		Name:       "calls",
 		Columns:    CallsColumns,
 		PrimaryKey: []*schema.Column{CallsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "calls_users_calls",
+				Columns:    []*schema.Column{CallsColumns[3]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
 	}
 	// UsersColumns holds the columns for the "users" table.
 	UsersColumns = []*schema.Column{
@@ -34,33 +43,8 @@ var (
 		Indexes: []*schema.Index{
 			{
 				Name:    "user_username",
-				Unique:  false,
+				Unique:  true,
 				Columns: []*schema.Column{UsersColumns[1]},
-			},
-		},
-	}
-	// UserCallsColumns holds the columns for the "user_calls" table.
-	UserCallsColumns = []*schema.Column{
-		{Name: "user_id", Type: field.TypeInt},
-		{Name: "call_id", Type: field.TypeInt},
-	}
-	// UserCallsTable holds the schema information for the "user_calls" table.
-	UserCallsTable = &schema.Table{
-		Name:       "user_calls",
-		Columns:    UserCallsColumns,
-		PrimaryKey: []*schema.Column{UserCallsColumns[0], UserCallsColumns[1]},
-		ForeignKeys: []*schema.ForeignKey{
-			{
-				Symbol:     "user_calls_user_id",
-				Columns:    []*schema.Column{UserCallsColumns[0]},
-				RefColumns: []*schema.Column{UsersColumns[0]},
-				OnDelete:   schema.Cascade,
-			},
-			{
-				Symbol:     "user_calls_call_id",
-				Columns:    []*schema.Column{UserCallsColumns[1]},
-				RefColumns: []*schema.Column{CallsColumns[0]},
-				OnDelete:   schema.Cascade,
 			},
 		},
 	}
@@ -68,14 +52,12 @@ var (
 	Tables = []*schema.Table{
 		CallsTable,
 		UsersTable,
-		UserCallsTable,
 	}
 )
 
 func init() {
+	CallsTable.ForeignKeys[0].RefTable = UsersTable
 	UsersTable.Annotation = &entsql.Annotation{
 		Table: "users",
 	}
-	UserCallsTable.ForeignKeys[0].RefTable = UsersTable
-	UserCallsTable.ForeignKeys[1].RefTable = CallsTable
 }

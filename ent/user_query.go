@@ -26,6 +26,7 @@ type UserQuery struct {
 	fields     []string
 	predicates []predicate.User
 	withCalls  *CallQuery
+	modifiers  []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -76,7 +77,7 @@ func (uq *UserQuery) QueryCalls() *CallQuery {
 		step := sqlgraph.NewStep(
 			sqlgraph.From(user.Table, user.FieldID, selector),
 			sqlgraph.To(call.Table, call.FieldID),
-			sqlgraph.Edge(sqlgraph.M2M, false, user.CallsTable, user.CallsPrimaryKey...),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.CallsTable, user.CallsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(uq.driver.Dialect(), step)
 		return fromU, nil
@@ -367,6 +368,9 @@ func (uq *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		node.Edges.loadedTypes = loadedTypes
 		return node.assignValues(columns, values)
 	}
+	if len(uq.modifiers) > 0 {
+		_spec.Modifiers = uq.modifiers
+	}
 	for i := range hooks {
 		hooks[i](ctx, _spec)
 	}
@@ -387,66 +391,42 @@ func (uq *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 }
 
 func (uq *UserQuery) loadCalls(ctx context.Context, query *CallQuery, nodes []*User, init func(*User), assign func(*User, *Call)) error {
-	edgeIDs := make([]driver.Value, len(nodes))
-	byID := make(map[int]*User)
-	nids := make(map[int]map[*User]struct{})
-	for i, node := range nodes {
-		edgeIDs[i] = node.ID
-		byID[node.ID] = node
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
 		if init != nil {
-			init(node)
+			init(nodes[i])
 		}
 	}
-	query.Where(func(s *sql.Selector) {
-		joinT := sql.Table(user.CallsTable)
-		s.Join(joinT).On(s.C(call.FieldID), joinT.C(user.CallsPrimaryKey[1]))
-		s.Where(sql.InValues(joinT.C(user.CallsPrimaryKey[0]), edgeIDs...))
-		columns := s.SelectedColumns()
-		s.Select(joinT.C(user.CallsPrimaryKey[0]))
-		s.AppendSelect(columns...)
-		s.SetDistinct(false)
-	})
-	if err := query.prepareQuery(ctx); err != nil {
-		return err
-	}
-	neighbors, err := query.sqlAll(ctx, func(_ context.Context, spec *sqlgraph.QuerySpec) {
-		assign := spec.Assign
-		values := spec.ScanValues
-		spec.ScanValues = func(columns []string) ([]interface{}, error) {
-			values, err := values(columns[1:])
-			if err != nil {
-				return nil, err
-			}
-			return append([]interface{}{new(sql.NullInt64)}, values...), nil
-		}
-		spec.Assign = func(columns []string, values []interface{}) error {
-			outValue := int(values[0].(*sql.NullInt64).Int64)
-			inValue := int(values[1].(*sql.NullInt64).Int64)
-			if nids[inValue] == nil {
-				nids[inValue] = map[*User]struct{}{byID[outValue]: struct{}{}}
-				return assign(columns[1:], values[1:])
-			}
-			nids[inValue][byID[outValue]] = struct{}{}
-			return nil
-		}
-	})
+	query.withFKs = true
+	query.Where(predicate.Call(func(s *sql.Selector) {
+		s.Where(sql.InValues(user.CallsColumn, fks...))
+	}))
+	neighbors, err := query.All(ctx)
 	if err != nil {
 		return err
 	}
 	for _, n := range neighbors {
-		nodes, ok := nids[n.ID]
+		fk := n.user_calls
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "user_calls" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
 		if !ok {
-			return fmt.Errorf(`unexpected "calls" node returned %v`, n.ID)
+			return fmt.Errorf(`unexpected foreign-key "user_calls" returned %v for node %v`, *fk, n.ID)
 		}
-		for kn := range nodes {
-			assign(kn, n)
-		}
+		assign(node, n)
 	}
 	return nil
 }
 
 func (uq *UserQuery) sqlCount(ctx context.Context) (int, error) {
 	_spec := uq.querySpec()
+	if len(uq.modifiers) > 0 {
+		_spec.Modifiers = uq.modifiers
+	}
 	_spec.Node.Columns = uq.fields
 	if len(uq.fields) > 0 {
 		_spec.Unique = uq.unique != nil && *uq.unique
@@ -525,6 +505,9 @@ func (uq *UserQuery) sqlQuery(ctx context.Context) *sql.Selector {
 	if uq.unique != nil && *uq.unique {
 		selector.Distinct()
 	}
+	for _, m := range uq.modifiers {
+		m(selector)
+	}
 	for _, p := range uq.predicates {
 		p(selector)
 	}
@@ -540,6 +523,12 @@ func (uq *UserQuery) sqlQuery(ctx context.Context) *sql.Selector {
 		selector.Limit(*limit)
 	}
 	return selector
+}
+
+// Modify adds a query modifier for attaching custom logic to queries.
+func (uq *UserQuery) Modify(modifiers ...func(s *sql.Selector)) *UserSelect {
+	uq.modifiers = append(uq.modifiers, modifiers...)
+	return uq.Select()
 }
 
 // UserGroupBy is the group-by builder for User entities.
@@ -632,4 +621,10 @@ func (us *UserSelect) sqlScan(ctx context.Context, v interface{}) error {
 	}
 	defer rows.Close()
 	return sql.ScanSlice(rows, v)
+}
+
+// Modify adds a query modifier for attaching custom logic to queries.
+func (us *UserSelect) Modify(modifiers ...func(s *sql.Selector)) *UserSelect {
+	us.modifiers = append(us.modifiers, modifiers...)
+	return us
 }

@@ -4,6 +4,7 @@ package ent
 
 import (
 	"calling-bill/ent/call"
+	"calling-bill/ent/user"
 	"fmt"
 	"strings"
 
@@ -21,22 +22,27 @@ type Call struct {
 	BlockCount int `json:"block_count,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the CallQuery when eager-loading is set.
-	Edges CallEdges `json:"edges"`
+	Edges      CallEdges `json:"edges"`
+	user_calls *int
 }
 
 // CallEdges holds the relations/edges for other nodes in the graph.
 type CallEdges struct {
 	// User holds the value of the user edge.
-	User []*User `json:"user,omitempty"`
+	User *User `json:"user,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
 	loadedTypes [1]bool
 }
 
 // UserOrErr returns the User value or an error if the edge
-// was not loaded in eager-loading.
-func (e CallEdges) UserOrErr() ([]*User, error) {
+// was not loaded in eager-loading, or loaded but was not found.
+func (e CallEdges) UserOrErr() (*User, error) {
 	if e.loadedTypes[0] {
+		if e.User == nil {
+			// Edge was loaded but was not found.
+			return nil, &NotFoundError{label: user.Label}
+		}
 		return e.User, nil
 	}
 	return nil, &NotLoadedError{edge: "user"}
@@ -48,6 +54,8 @@ func (*Call) scanValues(columns []string) ([]interface{}, error) {
 	for i := range columns {
 		switch columns[i] {
 		case call.FieldID, call.FieldDuration, call.FieldBlockCount:
+			values[i] = new(sql.NullInt64)
+		case call.ForeignKeys[0]: // user_calls
 			values[i] = new(sql.NullInt64)
 		default:
 			return nil, fmt.Errorf("unexpected column %q for type Call", columns[i])
@@ -81,6 +89,13 @@ func (c *Call) assignValues(columns []string, values []interface{}) error {
 				return fmt.Errorf("unexpected type %T for field block_count", values[i])
 			} else if value.Valid {
 				c.BlockCount = int(value.Int64)
+			}
+		case call.ForeignKeys[0]:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for edge-field user_calls", value)
+			} else if value.Valid {
+				c.user_calls = new(int)
+				*c.user_calls = int(value.Int64)
 			}
 		}
 	}

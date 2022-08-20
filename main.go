@@ -4,8 +4,9 @@ import (
 	"calling-bill/ent"
 	"calling-bill/helpers"
 	"calling-bill/route"
+	"fmt"
 	"github.com/gin-gonic/gin"
-
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
 )
@@ -15,11 +16,11 @@ var entClient *ent.Client
 var err error
 
 func init() {
+	err := godotenv.Load()
+	helpers.PanicErr(err)
 	logger = zap.NewExample()
 	entClient, err = helpers.GetDb()
-	if err != nil {
-		panic(err)
-	}
+	helpers.PanicErr(err)
 }
 
 // InjectDbClient sets dbClient object to the gin context
@@ -36,14 +37,11 @@ func InjectLogger() gin.HandlerFunc {
 	}
 }
 
-// panicErr panics if error not nil
-func panicErr(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
 func main() {
+	helpers.MigrateDb(helpers.DbClient)
+	if err != nil {
+		logger.Info(fmt.Sprintf("error when loading .env %s", err.Error()))
+	}
 	app := gin.Default()
 
 	// middlewares
@@ -51,6 +49,6 @@ func main() {
 	app.Use(InjectLogger())
 
 	route.SetUp(app)
-	err := app.Run() // TODO: read port from env
-	panic(err)
+	err = app.Run() // TODO: read port from env
+	helpers.PanicErr(err)
 }

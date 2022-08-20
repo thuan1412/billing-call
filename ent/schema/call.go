@@ -22,6 +22,10 @@ func (Call) Fields() []ent.Field {
 // Edges of the Call.
 func (Call) Edges() []ent.Edge {
 	return []ent.Edge{
-		edge.From("user", User.Type).Ref("calls"),
+		edge.
+			From("user", User.Type).
+			Ref("calls").
+			Required().
+			Unique(),
 	}
 }

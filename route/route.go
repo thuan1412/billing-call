@@ -7,4 +7,5 @@ import (
 
 func SetUp(r *gin.Engine) {
 	r.GET("/ping", api.AddCall)
+	r.GET("/mobile/:username/billing", api.GetBill)
 }

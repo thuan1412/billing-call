@@ -18,8 +18,9 @@ import (
 // CallUpdate is the builder for updating Call entities.
 type CallUpdate struct {
 	config
-	hooks    []Hook
-	mutation *CallMutation
+	hooks     []Hook
+	mutation  *CallMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // Where appends a list predicates to the CallUpdate builder.
@@ -54,19 +55,15 @@ func (cu *CallUpdate) AddBlockCount(i int) *CallUpdate {
 	return cu
 }
 
-// AddUserIDs adds the "user" edge to the User entity by IDs.
-func (cu *CallUpdate) AddUserIDs(ids ...int) *CallUpdate {
-	cu.mutation.AddUserIDs(ids...)
+// SetUserID sets the "user" edge to the User entity by ID.
+func (cu *CallUpdate) SetUserID(id int) *CallUpdate {
+	cu.mutation.SetUserID(id)
 	return cu
 }
 
-// AddUser adds the "user" edges to the User entity.
-func (cu *CallUpdate) AddUser(u ...*User) *CallUpdate {
-	ids := make([]int, len(u))
-	for i := range u {
-		ids[i] = u[i].ID
-	}
-	return cu.AddUserIDs(ids...)
+// SetUser sets the "user" edge to the User entity.
+func (cu *CallUpdate) SetUser(u *User) *CallUpdate {
+	return cu.SetUserID(u.ID)
 }
 
 // Mutation returns the CallMutation object of the builder.
@@ -74,25 +71,10 @@ func (cu *CallUpdate) Mutation() *CallMutation {
 	return cu.mutation
 }
 
-// ClearUser clears all "user" edges to the User entity.
+// ClearUser clears the "user" edge to the User entity.
 func (cu *CallUpdate) ClearUser() *CallUpdate {
 	cu.mutation.ClearUser()
 	return cu
-}
-
-// RemoveUserIDs removes the "user" edge to User entities by IDs.
-func (cu *CallUpdate) RemoveUserIDs(ids ...int) *CallUpdate {
-	cu.mutation.RemoveUserIDs(ids...)
-	return cu
-}
-
-// RemoveUser removes "user" edges to User entities.
-func (cu *CallUpdate) RemoveUser(u ...*User) *CallUpdate {
-	ids := make([]int, len(u))
-	for i := range u {
-		ids[i] = u[i].ID
-	}
-	return cu.RemoveUserIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -102,12 +84,18 @@ func (cu *CallUpdate) Save(ctx context.Context) (int, error) {
 		affected int
 	)
 	if len(cu.hooks) == 0 {
+		if err = cu.check(); err != nil {
+			return 0, err
+		}
 		affected, err = cu.sqlSave(ctx)
 	} else {
 		var mut Mutator = MutateFunc(func(ctx context.Context, m Mutation) (Value, error) {
 			mutation, ok := m.(*CallMutation)
 			if !ok {
 				return nil, fmt.Errorf("unexpected mutation type %T", m)
+			}
+			if err = cu.check(); err != nil {
+				return 0, err
 			}
 			cu.mutation = mutation
 			affected, err = cu.sqlSave(ctx)
@@ -147,6 +135,20 @@ func (cu *CallUpdate) ExecX(ctx context.Context) {
 	if err := cu.Exec(ctx); err != nil {
 		panic(err)
 	}
+}
+
+// check runs all checks and user-defined validators on the builder.
+func (cu *CallUpdate) check() error {
+	if _, ok := cu.mutation.UserID(); cu.mutation.UserCleared() && !ok {
+		return errors.New(`ent: clearing a required unique edge "Call.user"`)
+	}
+	return nil
+}
+
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (cu *CallUpdate) Modify(modifiers ...func(u *sql.UpdateBuilder)) *CallUpdate {
+	cu.modifiers = append(cu.modifiers, modifiers...)
+	return cu
 }
 
 func (cu *CallUpdate) sqlSave(ctx context.Context) (n int, err error) {
@@ -197,10 +199,10 @@ func (cu *CallUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if cu.mutation.UserCleared() {
 		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.M2M,
+			Rel:     sqlgraph.M2O,
 			Inverse: true,
 			Table:   call.UserTable,
-			Columns: call.UserPrimaryKey,
+			Columns: []string{call.UserColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: &sqlgraph.FieldSpec{
@@ -208,34 +210,15 @@ func (cu *CallUpdate) sqlSave(ctx context.Context) (n int, err error) {
 					Column: user.FieldID,
 				},
 			},
-		}
-		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
-	}
-	if nodes := cu.mutation.RemovedUserIDs(); len(nodes) > 0 && !cu.mutation.UserCleared() {
-		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.M2M,
-			Inverse: true,
-			Table:   call.UserTable,
-			Columns: call.UserPrimaryKey,
-			Bidi:    false,
-			Target: &sqlgraph.EdgeTarget{
-				IDSpec: &sqlgraph.FieldSpec{
-					Type:   field.TypeInt,
-					Column: user.FieldID,
-				},
-			},
-		}
-		for _, k := range nodes {
-			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
 	}
 	if nodes := cu.mutation.UserIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.M2M,
+			Rel:     sqlgraph.M2O,
 			Inverse: true,
 			Table:   call.UserTable,
-			Columns: call.UserPrimaryKey,
+			Columns: []string{call.UserColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: &sqlgraph.FieldSpec{
@@ -249,6 +232,7 @@ func (cu *CallUpdate) sqlSave(ctx context.Context) (n int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	_spec.Modifiers = cu.modifiers
 	if n, err = sqlgraph.UpdateNodes(ctx, cu.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{call.Label}
@@ -263,9 +247,10 @@ func (cu *CallUpdate) sqlSave(ctx context.Context) (n int, err error) {
 // CallUpdateOne is the builder for updating a single Call entity.
 type CallUpdateOne struct {
 	config
-	fields   []string
-	hooks    []Hook
-	mutation *CallMutation
+	fields    []string
+	hooks     []Hook
+	mutation  *CallMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // SetDuration sets the "duration" field.
@@ -294,19 +279,15 @@ func (cuo *CallUpdateOne) AddBlockCount(i int) *CallUpdateOne {
 	return cuo
 }
 
-// AddUserIDs adds the "user" edge to the User entity by IDs.
-func (cuo *CallUpdateOne) AddUserIDs(ids ...int) *CallUpdateOne {
-	cuo.mutation.AddUserIDs(ids...)
+// SetUserID sets the "user" edge to the User entity by ID.
+func (cuo *CallUpdateOne) SetUserID(id int) *CallUpdateOne {
+	cuo.mutation.SetUserID(id)
 	return cuo
 }
 
-// AddUser adds the "user" edges to the User entity.
-func (cuo *CallUpdateOne) AddUser(u ...*User) *CallUpdateOne {
-	ids := make([]int, len(u))
-	for i := range u {
-		ids[i] = u[i].ID
-	}
-	return cuo.AddUserIDs(ids...)
+// SetUser sets the "user" edge to the User entity.
+func (cuo *CallUpdateOne) SetUser(u *User) *CallUpdateOne {
+	return cuo.SetUserID(u.ID)
 }
 
 // Mutation returns the CallMutation object of the builder.
@@ -314,25 +295,10 @@ func (cuo *CallUpdateOne) Mutation() *CallMutation {
 	return cuo.mutation
 }
 
-// ClearUser clears all "user" edges to the User entity.
+// ClearUser clears the "user" edge to the User entity.
 func (cuo *CallUpdateOne) ClearUser() *CallUpdateOne {
 	cuo.mutation.ClearUser()
 	return cuo
-}
-
-// RemoveUserIDs removes the "user" edge to User entities by IDs.
-func (cuo *CallUpdateOne) RemoveUserIDs(ids ...int) *CallUpdateOne {
-	cuo.mutation.RemoveUserIDs(ids...)
-	return cuo
-}
-
-// RemoveUser removes "user" edges to User entities.
-func (cuo *CallUpdateOne) RemoveUser(u ...*User) *CallUpdateOne {
-	ids := make([]int, len(u))
-	for i := range u {
-		ids[i] = u[i].ID
-	}
-	return cuo.RemoveUserIDs(ids...)
 }
 
 // Select allows selecting one or more fields (columns) of the returned entity.
@@ -349,12 +315,18 @@ func (cuo *CallUpdateOne) Save(ctx context.Context) (*Call, error) {
 		node *Call
 	)
 	if len(cuo.hooks) == 0 {
+		if err = cuo.check(); err != nil {
+			return nil, err
+		}
 		node, err = cuo.sqlSave(ctx)
 	} else {
 		var mut Mutator = MutateFunc(func(ctx context.Context, m Mutation) (Value, error) {
 			mutation, ok := m.(*CallMutation)
 			if !ok {
 				return nil, fmt.Errorf("unexpected mutation type %T", m)
+			}
+			if err = cuo.check(); err != nil {
+				return nil, err
 			}
 			cuo.mutation = mutation
 			node, err = cuo.sqlSave(ctx)
@@ -400,6 +372,20 @@ func (cuo *CallUpdateOne) ExecX(ctx context.Context) {
 	if err := cuo.Exec(ctx); err != nil {
 		panic(err)
 	}
+}
+
+// check runs all checks and user-defined validators on the builder.
+func (cuo *CallUpdateOne) check() error {
+	if _, ok := cuo.mutation.UserID(); cuo.mutation.UserCleared() && !ok {
+		return errors.New(`ent: clearing a required unique edge "Call.user"`)
+	}
+	return nil
+}
+
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (cuo *CallUpdateOne) Modify(modifiers ...func(u *sql.UpdateBuilder)) *CallUpdateOne {
+	cuo.modifiers = append(cuo.modifiers, modifiers...)
+	return cuo
 }
 
 func (cuo *CallUpdateOne) sqlSave(ctx context.Context) (_node *Call, err error) {
@@ -467,10 +453,10 @@ func (cuo *CallUpdateOne) sqlSave(ctx context.Context) (_node *Call, err error) 
 	}
 	if cuo.mutation.UserCleared() {
 		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.M2M,
+			Rel:     sqlgraph.M2O,
 			Inverse: true,
 			Table:   call.UserTable,
-			Columns: call.UserPrimaryKey,
+			Columns: []string{call.UserColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: &sqlgraph.FieldSpec{
@@ -478,34 +464,15 @@ func (cuo *CallUpdateOne) sqlSave(ctx context.Context) (_node *Call, err error) 
 					Column: user.FieldID,
 				},
 			},
-		}
-		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
-	}
-	if nodes := cuo.mutation.RemovedUserIDs(); len(nodes) > 0 && !cuo.mutation.UserCleared() {
-		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.M2M,
-			Inverse: true,
-			Table:   call.UserTable,
-			Columns: call.UserPrimaryKey,
-			Bidi:    false,
-			Target: &sqlgraph.EdgeTarget{
-				IDSpec: &sqlgraph.FieldSpec{
-					Type:   field.TypeInt,
-					Column: user.FieldID,
-				},
-			},
-		}
-		for _, k := range nodes {
-			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
 	}
 	if nodes := cuo.mutation.UserIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.M2M,
+			Rel:     sqlgraph.M2O,
 			Inverse: true,
 			Table:   call.UserTable,
-			Columns: call.UserPrimaryKey,
+			Columns: []string{call.UserColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: &sqlgraph.FieldSpec{
@@ -519,6 +486,7 @@ func (cuo *CallUpdateOne) sqlSave(ctx context.Context) (_node *Call, err error) 
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	_spec.Modifiers = cuo.modifiers
 	_node = &Call{config: cuo.config}
 	_spec.Assign = _node.assignValues
 	_spec.ScanValues = _node.scanValues

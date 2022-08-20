@@ -32,19 +32,15 @@ func (cc *CallCreate) SetBlockCount(i int) *CallCreate {
 	return cc
 }
 
-// AddUserIDs adds the "user" edge to the User entity by IDs.
-func (cc *CallCreate) AddUserIDs(ids ...int) *CallCreate {
-	cc.mutation.AddUserIDs(ids...)
+// SetUserID sets the "user" edge to the User entity by ID.
+func (cc *CallCreate) SetUserID(id int) *CallCreate {
+	cc.mutation.SetUserID(id)
 	return cc
 }
 
-// AddUser adds the "user" edges to the User entity.
-func (cc *CallCreate) AddUser(u ...*User) *CallCreate {
-	ids := make([]int, len(u))
-	for i := range u {
-		ids[i] = u[i].ID
-	}
-	return cc.AddUserIDs(ids...)
+// SetUser sets the "user" edge to the User entity.
+func (cc *CallCreate) SetUser(u *User) *CallCreate {
+	return cc.SetUserID(u.ID)
 }
 
 // Mutation returns the CallMutation object of the builder.
@@ -129,6 +125,9 @@ func (cc *CallCreate) check() error {
 	if _, ok := cc.mutation.BlockCount(); !ok {
 		return &ValidationError{Name: "block_count", err: errors.New(`ent: missing required field "Call.block_count"`)}
 	}
+	if _, ok := cc.mutation.UserID(); !ok {
+		return &ValidationError{Name: "user", err: errors.New(`ent: missing required edge "Call.user"`)}
+	}
 	return nil
 }
 
@@ -174,10 +173,10 @@ func (cc *CallCreate) createSpec() (*Call, *sqlgraph.CreateSpec) {
 	}
 	if nodes := cc.mutation.UserIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.M2M,
+			Rel:     sqlgraph.M2O,
 			Inverse: true,
 			Table:   call.UserTable,
-			Columns: call.UserPrimaryKey,
+			Columns: []string{call.UserColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: &sqlgraph.FieldSpec{
@@ -189,6 +188,7 @@ func (cc *CallCreate) createSpec() (*Call, *sqlgraph.CreateSpec) {
 		for _, k := range nodes {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
+		_node.user_calls = &nodes[0]
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec

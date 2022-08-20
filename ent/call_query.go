@@ -7,7 +7,6 @@ import (
 	"calling-bill/ent/predicate"
 	"calling-bill/ent/user"
 	"context"
-	"database/sql/driver"
 	"fmt"
 	"math"
 
@@ -26,6 +25,8 @@ type CallQuery struct {
 	fields     []string
 	predicates []predicate.Call
 	withUser   *UserQuery
+	withFKs    bool
+	modifiers  []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -76,7 +77,7 @@ func (cq *CallQuery) QueryUser() *UserQuery {
 		step := sqlgraph.NewStep(
 			sqlgraph.From(call.Table, call.FieldID, selector),
 			sqlgraph.To(user.Table, user.FieldID),
-			sqlgraph.Edge(sqlgraph.M2M, true, call.UserTable, call.UserPrimaryKey...),
+			sqlgraph.Edge(sqlgraph.M2O, true, call.UserTable, call.UserColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(cq.driver.Dialect(), step)
 		return fromU, nil
@@ -353,11 +354,18 @@ func (cq *CallQuery) prepareQuery(ctx context.Context) error {
 func (cq *CallQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Call, error) {
 	var (
 		nodes       = []*Call{}
+		withFKs     = cq.withFKs
 		_spec       = cq.querySpec()
 		loadedTypes = [1]bool{
 			cq.withUser != nil,
 		}
 	)
+	if cq.withUser != nil {
+		withFKs = true
+	}
+	if withFKs {
+		_spec.Node.Columns = append(_spec.Node.Columns, call.ForeignKeys...)
+	}
 	_spec.ScanValues = func(columns []string) ([]interface{}, error) {
 		return (*Call).scanValues(nil, columns)
 	}
@@ -366,6 +374,9 @@ func (cq *CallQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Call, e
 		nodes = append(nodes, node)
 		node.Edges.loadedTypes = loadedTypes
 		return node.assignValues(columns, values)
+	}
+	if len(cq.modifiers) > 0 {
+		_spec.Modifiers = cq.modifiers
 	}
 	for i := range hooks {
 		hooks[i](ctx, _spec)
@@ -377,9 +388,8 @@ func (cq *CallQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Call, e
 		return nodes, nil
 	}
 	if query := cq.withUser; query != nil {
-		if err := cq.loadUser(ctx, query, nodes,
-			func(n *Call) { n.Edges.User = []*User{} },
-			func(n *Call, e *User) { n.Edges.User = append(n.Edges.User, e) }); err != nil {
+		if err := cq.loadUser(ctx, query, nodes, nil,
+			func(n *Call, e *User) { n.Edges.User = e }); err != nil {
 			return nil, err
 		}
 	}
@@ -387,59 +397,30 @@ func (cq *CallQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Call, e
 }
 
 func (cq *CallQuery) loadUser(ctx context.Context, query *UserQuery, nodes []*Call, init func(*Call), assign func(*Call, *User)) error {
-	edgeIDs := make([]driver.Value, len(nodes))
-	byID := make(map[int]*Call)
-	nids := make(map[int]map[*Call]struct{})
-	for i, node := range nodes {
-		edgeIDs[i] = node.ID
-		byID[node.ID] = node
-		if init != nil {
-			init(node)
+	ids := make([]int, 0, len(nodes))
+	nodeids := make(map[int][]*Call)
+	for i := range nodes {
+		if nodes[i].user_calls == nil {
+			continue
 		}
+		fk := *nodes[i].user_calls
+		if _, ok := nodeids[fk]; !ok {
+			ids = append(ids, fk)
+		}
+		nodeids[fk] = append(nodeids[fk], nodes[i])
 	}
-	query.Where(func(s *sql.Selector) {
-		joinT := sql.Table(call.UserTable)
-		s.Join(joinT).On(s.C(user.FieldID), joinT.C(call.UserPrimaryKey[0]))
-		s.Where(sql.InValues(joinT.C(call.UserPrimaryKey[1]), edgeIDs...))
-		columns := s.SelectedColumns()
-		s.Select(joinT.C(call.UserPrimaryKey[1]))
-		s.AppendSelect(columns...)
-		s.SetDistinct(false)
-	})
-	if err := query.prepareQuery(ctx); err != nil {
-		return err
-	}
-	neighbors, err := query.sqlAll(ctx, func(_ context.Context, spec *sqlgraph.QuerySpec) {
-		assign := spec.Assign
-		values := spec.ScanValues
-		spec.ScanValues = func(columns []string) ([]interface{}, error) {
-			values, err := values(columns[1:])
-			if err != nil {
-				return nil, err
-			}
-			return append([]interface{}{new(sql.NullInt64)}, values...), nil
-		}
-		spec.Assign = func(columns []string, values []interface{}) error {
-			outValue := int(values[0].(*sql.NullInt64).Int64)
-			inValue := int(values[1].(*sql.NullInt64).Int64)
-			if nids[inValue] == nil {
-				nids[inValue] = map[*Call]struct{}{byID[outValue]: struct{}{}}
-				return assign(columns[1:], values[1:])
-			}
-			nids[inValue][byID[outValue]] = struct{}{}
-			return nil
-		}
-	})
+	query.Where(user.IDIn(ids...))
+	neighbors, err := query.All(ctx)
 	if err != nil {
 		return err
 	}
 	for _, n := range neighbors {
-		nodes, ok := nids[n.ID]
+		nodes, ok := nodeids[n.ID]
 		if !ok {
-			return fmt.Errorf(`unexpected "user" node returned %v`, n.ID)
+			return fmt.Errorf(`unexpected foreign-key "user_calls" returned %v`, n.ID)
 		}
-		for kn := range nodes {
-			assign(kn, n)
+		for i := range nodes {
+			assign(nodes[i], n)
 		}
 	}
 	return nil
@@ -447,6 +428,9 @@ func (cq *CallQuery) loadUser(ctx context.Context, query *UserQuery, nodes []*Ca
 
 func (cq *CallQuery) sqlCount(ctx context.Context) (int, error) {
 	_spec := cq.querySpec()
+	if len(cq.modifiers) > 0 {
+		_spec.Modifiers = cq.modifiers
+	}
 	_spec.Node.Columns = cq.fields
 	if len(cq.fields) > 0 {
 		_spec.Unique = cq.unique != nil && *cq.unique
@@ -525,6 +509,9 @@ func (cq *CallQuery) sqlQuery(ctx context.Context) *sql.Selector {
 	if cq.unique != nil && *cq.unique {
 		selector.Distinct()
 	}
+	for _, m := range cq.modifiers {
+		m(selector)
+	}
 	for _, p := range cq.predicates {
 		p(selector)
 	}
@@ -540,6 +527,12 @@ func (cq *CallQuery) sqlQuery(ctx context.Context) *sql.Selector {
 		selector.Limit(*limit)
 	}
 	return selector
+}
+
+// Modify adds a query modifier for attaching custom logic to queries.
+func (cq *CallQuery) Modify(modifiers ...func(s *sql.Selector)) *CallSelect {
+	cq.modifiers = append(cq.modifiers, modifiers...)
+	return cq.Select()
 }
 
 // CallGroupBy is the group-by builder for Call entities.
@@ -632,4 +625,10 @@ func (cs *CallSelect) sqlScan(ctx context.Context, v interface{}) error {
 	}
 	defer rows.Close()
 	return sql.ScanSlice(rows, v)
+}
+
+// Modify adds a query modifier for attaching custom logic to queries.
+func (cs *CallSelect) Modify(modifiers ...func(s *sql.Selector)) *CallSelect {
+	cs.modifiers = append(cs.modifiers, modifiers...)
+	return cs
 }

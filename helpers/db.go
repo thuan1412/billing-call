@@ -8,6 +8,7 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	"fmt"
 	"log"
+	"os"
 	"time"
 )
 
@@ -15,7 +16,15 @@ var DbClient *ent.Client
 
 // GetDb return an ent client
 func GetDb() (*ent.Client, error) {
-	db, err := sql.Open(dialect.Postgres, "postgres://postgres:1@localhost:5432/gin-ent?sslmode=disable")
+	dbURI := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		os.Getenv("DB_USERNAME"),
+		os.Getenv("DB_PW"),
+		os.Getenv("DB_HOST"),
+		os.Getenv("DB_PORT"),
+		os.Getenv("DB_DATABASE"))
+
+	fmt.Println("db url", dbURI)
+	db, err := sql.Open(dialect.Postgres, dbURI)
 	if err != nil {
 		fmt.Println("failed to open connection to database:", err)
 		return nil, err
@@ -42,4 +51,10 @@ func GetDb() (*ent.Client, error) {
 	})
 	DbClient = client
 	return client, nil
+}
+
+func MigrateDb(client *ent.Client) {
+	if err := client.Schema.Create(context.Background()); err != nil {
+		log.Fatalln("failed to create schema:", err)
+	}
 }

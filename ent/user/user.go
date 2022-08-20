@@ -13,11 +13,13 @@ const (
 	EdgeCalls = "calls"
 	// Table holds the table name of the user in the database.
 	Table = "users"
-	// CallsTable is the table that holds the calls relation/edge. The primary key declared below.
-	CallsTable = "user_calls"
+	// CallsTable is the table that holds the calls relation/edge.
+	CallsTable = "calls"
 	// CallsInverseTable is the table name for the Call entity.
 	// It exists in this package in order to avoid circular dependency with the "call" package.
 	CallsInverseTable = "calls"
+	// CallsColumn is the table column denoting the calls relation/edge.
+	CallsColumn = "user_calls"
 )
 
 // Columns holds all SQL columns for user fields.
@@ -25,12 +27,6 @@ var Columns = []string{
 	FieldID,
 	FieldUsername,
 }
-
-var (
-	// CallsPrimaryKey and CallsColumn2 are the table columns denoting the
-	// primary key for the calls relation (M2M).
-	CallsPrimaryKey = []string{"user_id", "call_id"}
-)
 
 // ValidColumn reports if the column name is valid (part of the table columns).
 func ValidColumn(column string) bool {
