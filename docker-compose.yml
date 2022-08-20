@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  app:
+    depends_on:
+      - pgdb
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - backend
+    ports:
+      - "8082:8080"
+    environment:
+      - PORT=8080
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=1
+      - DB_DATABASE=calling-bill
+      - DB_PORT=5432
+      - DB_HOST=pgdb
+    entrypoint: go run main.go
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+
+  pgdb:
+    image: postgres:14.1-alpine
+    volumes:
+      - 'db:/var/lib/postgres/data'
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=1
+      - POSTGRES_DB=calling-bill
+    ports:
+      - '5433:5432'
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  db:
