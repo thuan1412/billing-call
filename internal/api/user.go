@@ -1,11 +1,11 @@
 package api
 
 import (
-	entCall "calling-bill/ent/call"
-	entUser "calling-bill/ent/user"
+	"calling-bill/ent"
 	"calling-bill/helpers"
-	"entgo.io/ent/dialect/sql"
+	"calling-bill/internal/service"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 func AddCall(c *gin.Context) {
@@ -35,41 +35,33 @@ type BillingData struct {
 }
 
 func GetBill(c *gin.Context) {
-	var billingData []BillingData
 	var err error
+	userService := service.UserService{
+		DB:     helpers.DbClient,
+		Logger: zap.NewExample(), // TODO: should use DI for this field
+	}
 	username := c.Param("username")
 
 	// check user existent
-	userId, err := helpers.DbClient.User.Query().Where(entUser.Username(username)).FirstID(c)
+	userId, err := userService.GetUserIDFromUsername(c, username)
 
 	if err != nil {
-		c.JSON(200, gin.H{
-			"asd": err.Error(),
+		if ent.IsNotFound(err) {
+			c.JSON(400, gin.H{
+				"message": "invalid username",
+			})
+			return
+		}
+		c.JSON(500, gin.H{
+			"message": err.Error(),
 		})
 		return
 	}
 
-	err = helpers.DbClient.Debug().Call.
-		Query().
-		Where(entCall.HasUserWith(entUser.ID(userId))).
-		Modify(func(s *sql.Selector) {
-			s.Select(
-				sql.As(sql.Count("*"), "call_count"),
-				sql.As(sql.Sum("block_count"), "block_count"),
-			)
-		}).
-		Scan(c, &billingData)
-
-	if err != nil {
-		return
-	}
-	if len(billingData) != 1 {
-		//return errors.New("some error :D")
-		return
-	}
+	billingData, err := userService.GetBilling(c, *userId)
 
 	c.JSON(200, gin.H{
-		"data": billingData[0],
+		"data": billingData,
 	})
 	return
 }
