@@ -2,7 +2,7 @@ package main
 
 import (
 	"calling-bill/ent"
-	"calling-bill/helpers"
+	helpers "calling-bill/internal/helpers"
 	"calling-bill/route"
 	"fmt"
 	"github.com/gin-gonic/gin"

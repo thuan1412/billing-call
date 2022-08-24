@@ -4,6 +4,7 @@ import (
 	"calling-bill/ent"
 	entCall "calling-bill/ent/call"
 	entUser "calling-bill/ent/user"
+	"calling-bill/internal/helpers"
 	"context"
 	"entgo.io/ent/dialect/sql"
 	"errors"
@@ -16,9 +17,28 @@ type UserService struct {
 	Logger *zap.Logger
 }
 
+type CreateCallData struct {
+	Duration int `json:"call_duration"`
+}
+
+func (s *UserService) AddCall(ctx context.Context, userId int, createCallData CreateCallData) error {
+
+	newCall := s.DB.Call.
+		Create().
+		SetDuration(createCallData.Duration).
+		SetBlockCount(helpers.CalculateBlockCount(createCallData.Duration)).
+		SetUserID(userId)
+
+	_, err := newCall.Save(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type BillingData struct {
-	Count int `sql:"call_count"`
-	Sum   int `sql:"block_count"`
+	CallCount  int `sql:"call_count" json:"call_count"`
+	BlockCount int `sql:"block_count" json:"block_count"`
 }
 
 func (s *UserService) GetBilling(ctx context.Context, userId int) (*BillingData, error) {

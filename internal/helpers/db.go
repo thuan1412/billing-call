@@ -14,7 +14,7 @@ import (
 
 var DbClient *ent.Client
 
-// GetDb return an ent client
+// GetDb returns an ent client
 func GetDb() (*ent.Client, error) {
 	dbURI := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		os.Getenv("DB_USERNAME"),

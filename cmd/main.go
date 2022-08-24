@@ -1,7 +1,7 @@
 package main
 
 import (
-	"calling-bill/helpers"
+	helpers "calling-bill/internal/helpers"
 	"fmt"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"

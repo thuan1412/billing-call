@@ -2,29 +2,51 @@ package api
 
 import (
 	"calling-bill/ent"
-	"calling-bill/helpers"
+	"calling-bill/internal/helpers"
 	"calling-bill/internal/service"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"net/http"
 )
 
 func AddCall(c *gin.Context) {
-	newCall := helpers.DbClient.Call.
-		Create().
-		SetDuration(1000).
-		SetBlockCount(123).
-		SetUserID(1)
+	var err error
+	userService := service.UserService{
+		DB:     helpers.DbClient,
+		Logger: zap.NewExample(), // TODO: should use DI for this field
+	}
+	username := c.Param("username")
 
-	_, err := newCall.Save(c)
+	// check user existent
+	userId, err := userService.GetUserIDFromUsername(c, username)
+
+	// validate request body
+	var createCallData service.CreateCallData
+	if err := c.ShouldBindJSON(&createCallData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	if err != nil {
+		if ent.IsNotFound(err) {
+			c.JSON(400, gin.H{
+				"message": "invalid username",
+			})
+			return
+		}
 		c.JSON(500, gin.H{
 			"message": err.Error(),
 		})
 		return
 	}
 
+	err = userService.AddCall(c, *userId, createCallData)
+	if err != nil {
+		return
+	}
+
 	c.JSON(200, gin.H{
-		"message": "something?",
+		"message": "success",
 	})
 	return
 }
@@ -60,8 +82,6 @@ func GetBill(c *gin.Context) {
 
 	billingData, err := userService.GetBilling(c, *userId)
 
-	c.JSON(200, gin.H{
-		"data": billingData,
-	})
+	c.JSON(200, billingData)
 	return
 }
